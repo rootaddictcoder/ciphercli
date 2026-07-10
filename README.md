@@ -181,13 +181,13 @@ AAAAAAAAAAAAAAAAAAAAAAAAAA
 
 ### Invalid Key and Conflicting Command-Line Options
 
-![Errors](examples/demo-2.png)
+![Errors](examples/demo%20(1).png)
 
 ---
 
 ### Help Menu
 
-![Help Menu](examples/demo-3.png)
+![Help Menu](examples/demo%20(2).png)
 
 ---
 

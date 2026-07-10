@@ -1,3 +1,18 @@
+/*
+ * CipherCLI
+ * ---------
+ * A simple command-line substitution-cipher tool.
+ *
+ * Usage:
+ *   ciphercli -e -k <key> -m <message>
+ *   ciphercli -d -k <key> -m <message>
+ *   ciphercli -e -k <key> -f <input.txt> [-o <output.txt>]
+ *   ciphercli -d -k <key> -f <input.txt> [-o <output.txt>]
+ *
+ * <key> must be a 26-letter permutation of the alphabet, e.g.
+ * "qwertyuiopasdfghjklzxcvbnm".
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -11,10 +26,10 @@ typedef struct Arguments
     bool decrypt;
     bool inputFromFile;
     bool outputToFile;
-    char *inputMessage;
-    char *outputMessage;
-    char *inputFile;
-    char *outputFile;
+    char *inputMessage;  /* heap-owned; freed by freeArgs() */
+    char *outputMessage; /* heap-owned; freed by freeArgs() */
+    char *inputFile;     /* heap-owned; freed by freeArgs() */
+    char *outputFile;    /* heap-owned; freed by freeArgs() */
     char forwardkey[27];
     char reverseKey[27];
 } args;
@@ -128,6 +143,11 @@ void printHelp()
     printf("  %-6s Display this help message\n", "-h");
 }
 
+/*
+ * Classifies every argv entry, tallying how many times each flag appears
+ * and recording the argv index of its most recent occurrence. Duplicate
+ * detection relies on the counts (e, d, m, f, o, k), not the positions.
+ */
 void tagType(int argc, char **argv, int *e, int *d, int *m, int *f, int *o, int *k, int *h, int *narg, int *ep, int *dp, int *mp, int *fp, int *op, int *kp)
 {
     for (int i = 1; i < argc; i++)
@@ -173,11 +193,13 @@ void tagType(int argc, char **argv, int *e, int *d, int *m, int *f, int *o, int 
             else if ((strncmp("-h", argv[i], 2)) == 0 || (strncmp("-H", argv[i], 2)) == 0 || (strncmp("-?", argv[i], 2)) == 0)
             {
                 *h = *h + 1;
+                *narg = *narg + 1;
             }
         }
         else if (strlen(argv[i]) == 1 && (strncmp("?", argv[i], 1)) == 0)
         {
             *h = *h + 1;
+            *narg = *narg + 1;
         }
     }
 }
@@ -223,12 +245,52 @@ int tagTypeSingle(char *argv)
     return 0;
 }
 
+/*
+ * Checks whether `filename` ends in ".txt", case-insensitively (so both
+ * "data.txt" and "DATA.TXT" are accepted).
+ *
+ * The length check happens first and short-circuits before any pointer
+ * arithmetic is performed, so this never walks off the front of a short
+ * or empty string.
+ */
+static bool hasValidTxtExtension(const char *filename)
+{
+    if (filename == NULL)
+    {
+        return false;
+    }
+
+    size_t len = strlen(filename);
+    if (len < 5) /* shortest valid name is "a.txt" (1 char + ".txt") */
+    {
+        return false;
+    }
+
+    const char *ext = filename + (len - 4);
+    return ext[0] == '.' &&
+           tolower((unsigned char)ext[1]) == 't' &&
+           tolower((unsigned char)ext[2]) == 'x' &&
+           tolower((unsigned char)ext[3]) == 't';
+}
+
+/*
+ * Validates and normalizes the substitution key, then derives the
+ * forward and reverse lookup tables into `args`.
+ *
+ * Note: ctype.h functions (isalpha/tolower/etc.) are only defined for
+ * values representable as `unsigned char` or EOF. On platforms where
+ * `char` is signed (the common case, e.g. x86 Linux), any byte with its
+ * high bit set (>= 0x80 -- accented letters, UTF-8 continuation bytes,
+ * etc.) becomes a *negative* int when passed as a plain `char`, which is
+ * undefined behavior. We cast to `unsigned char` everywhere before
+ * calling into ctype.h to avoid this.
+ */
 int keyValidate(char *kc, struct Arguments *args)
 {
     size_t s = strlen(kc);
     for (size_t i = 0; i < s; i++)
     {
-        kc[i] = (char)tolower(kc[i]);
+        kc[i] = (char)tolower((unsigned char)kc[i]);
     }
 
     if (s == 26)
@@ -237,9 +299,9 @@ int keyValidate(char *kc, struct Arguments *args)
 
         for (int i = 0; i < 26; i++)
         {
-            if (isalpha(kc[i]) != 0)
+            if (isalpha((unsigned char)kc[i]) != 0)
             {
-                int index = tolower(kc[i]) - 'a';
+                int index = tolower((unsigned char)kc[i]) - 'a';
 
                 if (seen[index])
                 {
@@ -273,17 +335,23 @@ int keyValidate(char *kc, struct Arguments *args)
     return 1;
 }
 
-int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, int h, int narg, int ep, int dp, int mp, int fp, int op, int kp, char *mc, char *fc, char *oc, char *kc, struct Arguments *args)
+/*
+ * Validates the full argument set and, on success, copies the relevant
+ * values into `args`.
+ *
+ * Ownership note: mc/fc/oc/kc are passed as pointer-to-pointer so that
+ * when a buffer is grown with realloc() here, the caller's copy of the
+ * pointer is updated too. Realloc failures are simply
+ * reported and left for the single free() pass in parseArgument to
+ * clean up, so there is exactly one place in the whole program that
+ * ever frees these buffers.
+ */
+int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, int h, int narg, int ep, int dp, int mp, int fp, int op, int kp, char **mc, char **fc, char **oc, char **kc, struct Arguments *args)
 {
 
     if (argc == 1)
     {
         printError(1);
-        return 0;
-    }
-    if (argc > 2 && h > 0)
-    {
-        printError(17);
         return 0;
     }
     if (argc == 2 && h == 1)
@@ -309,6 +377,21 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
     if ((m == 0 && f == 0))
     {
         printError(7);
+        return 0;
+    }
+    if (k == 0)
+    {
+        printError(5);
+        return 0;
+    }
+    if (e > 1 || d > 1 || m > 1 || f > 1 || o > 1 || k > 1 || h > 1)
+    {
+        printError(12);
+        return 0;
+    }
+    if (argc > 2 && h > 0)
+    {
+        printError(17);
         return 0;
     }
 
@@ -375,86 +458,77 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
             }
             else
             {
-                char *temp = realloc(mc, ((s + 1) * sizeof(char)));
+                char *temp = realloc(*mc, ((s + 1) * sizeof(char)));
                 if (temp == NULL)
                 {
-                    free(mc);
                     printf("Dynamic memory allocation failed. Please run program again.\n");
                     return 0;
                 }
 
-                mc = temp;
-                strcpy(mc, argv[j]);
-                args->inputMessage = mc;
+                *mc = temp;
+                strcpy(*mc, argv[j]);
+                args->inputMessage = *mc;
             }
         }
         else if (j == fp + 1)
         {
-            if ((strncmp(&(argv[fp + 1][s]) - 4, ".txt", 4) != 0) || s < 5)
+            if (!hasValidTxtExtension(argv[fp + 1]))
             {
                 printError(15);
                 return 0;
             }
             else
             {
-                char *temp = realloc(fc, ((s + 1) * sizeof(char)));
+                char *temp = realloc(*fc, ((s + 1) * sizeof(char)));
                 if (temp == NULL)
                 {
-                    free(fc);
                     printf("Dynamic memory allocation failed. Please run program again.\n");
                     return 0;
                 }
 
-                fc = temp;
-                strcpy(fc, argv[j]);
+                *fc = temp;
+                strcpy(*fc, argv[j]);
                 args->inputFromFile = true;
-                args->inputFile = fc;
+                args->inputFile = *fc;
             }
         }
         else if (j == op + 1)
         {
-            if ((strncmp(&(argv[op + 1][s]) - 4, ".txt", 4) != 0) || s < 5)
+            if (!hasValidTxtExtension(argv[op + 1]))
             {
                 printError(16);
                 return 0;
             }
             else
             {
-                char *temp = realloc(oc, ((s + 1) * sizeof(char)));
+                char *temp = realloc(*oc, ((s + 1) * sizeof(char)));
                 if (temp == NULL)
                 {
-                    free(oc);
                     printf("Dynamic memory allocation failed. Please run program again.\n");
                     return 0;
                 }
 
-                oc = temp;
-                strcpy(oc, argv[j]);
+                *oc = temp;
+                strcpy(*oc, argv[j]);
                 args->outputToFile = true;
-                args->outputFile = oc;
+                args->outputFile = *oc;
             }
         }
         else if (j == kp + 1)
         {
+            char *temp = realloc(*kc, ((s + 1) * sizeof(char)));
+            if (temp == NULL)
+            {
+                printf("Dynamic memory allocation failed. Please run program again.\n");
+                return 0;
+            }
 
-            strcpy(kc, argv[j]);
-            if (keyValidate(kc, args) == 0)
+            *kc = temp;
+            strcpy(*kc, argv[j]);
+            if (keyValidate(*kc, args) == 0)
             {
                 return 0;
             }
-            // else
-            // {
-            //     // char *temp = realloc(kc, ((s + 1) * sizeof(char)));
-            //     // if (temp == NULL)
-            //     // {
-            //     //     free(kc);
-            //     //     printf("Dynamic memory allocation failed. Please run program again.\n");
-            //     //     return 0;
-            //     // }
-
-            //     // kc = temp;
-            //     strcpy(args->key, argv[j]);
-            // }
         }
         else
         {
@@ -463,37 +537,40 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
         }
     }
 
-    if (k == 0)
-    {
-        printError(5);
-        return 0;
-    }
     if (m == 1 && ((tagTypeSingle(argv[mp + 1]) != 0) || (mp + 1 == argc)))
     {
         printError(9);
         return 0;
     }
-    size_t s1 = strlen(argv[fp + 1]);
-    if (f == 1 && ((tagTypeSingle(argv[fp + 1]) != 0) || (fp + 1 == argc) || (strncmp(&argv[fp + 1][s1] - 4, ".txt", 4) != 0) || s1 < 5))
+    if (f == 1 && ((tagTypeSingle(argv[fp + 1]) != 0) || (fp + 1 == argc) || !hasValidTxtExtension(argv[fp + 1])))
     {
         printError(10);
         return 0;
     }
-    size_t s2 = strlen(argv[op + 1]);
-    if (o == 1 && ((tagTypeSingle(argv[op + 1]) != 0) || (op + 1 == argc) || (strncmp(&argv[op + 1][s2] - 4, ".txt", 4) != 0) || s2 < 5))
+    if (o == 1 && ((tagTypeSingle(argv[op + 1]) != 0) || (op + 1 == argc) || !hasValidTxtExtension(argv[op + 1])))
     {
         printError(11);
-        return 0;
-    }
-    if (e > 1 || d > 1 || m > 1 || f > 1 || o > 1 || k > 1)
-    {
-        printError(12);
         return 0;
     }
 
     return 1;
 }
 
+/*
+ * Parses argv into `args`.
+ *
+ * Buffer lifetime: mc/kc/oc/fc are scratch buffers owned exclusively by
+ * this function. errorType() may grow them via realloc() (through the
+ * pointer-to-pointer parameters) and, on success, copies the ones that
+ * are actually used into `args` for later use (inputMessage, inputFile,
+ * outputFile). `kc` is never stored in `args` -- keyValidate() only
+ * copies its contents into args->forwardkey/reverseKey -- so it is
+ * always freed here regardless of outcome.
+ *
+ * On failure, all four buffers still point at valid, owned allocations
+ * (either their original calloc() or a successful realloc()), so a
+ * single free() per buffer is always correct and never a double-free.
+ */
 int parseArgument(int argc, char **argv, struct Arguments *args)
 {
     char *mc = calloc(100, sizeof(char));
@@ -504,9 +581,32 @@ int parseArgument(int argc, char **argv, struct Arguments *args)
     int e = 0, d = 0, m = 0, f = 0, o = 0, k = 0, h = 0, narg = 1, ep = 0, dp = 0, mp = 0, fp = 0, op = 0, kp = 0;
 
     tagType(argc, argv, &e, &d, &m, &f, &o, &k, &h, &narg, &ep, &dp, &mp, &fp, &op, &kp);
-    if (errorType(argc, argv, e, d, m, f, o, k, h, narg, ep, dp, mp, fp, op, kp, mc, fc, oc, kc, args) == 0)
+    if (errorType(argc, argv, e, d, m, f, o, k, h, narg, ep, dp, mp, fp, op, kp, &mc, &fc, &oc, &kc, args) == 0)
     {
+        free(mc);
+        free(kc);
+        free(fc);
+        free(oc);
         return 0;
+    }
+
+    /* kc's contents were already copied into args->forwardkey/reverseKey
+     * by keyValidate(); the raw buffer itself is never needed again. */
+    free(kc);
+
+    /* Only the buffer for the input mode actually used (-m or -f) was
+     * handed off to `args`; free whichever one was left untouched. */
+    if (m == 0)
+    {
+        free(mc);
+    }
+    if (f == 0)
+    {
+        free(fc);
+    }
+    if (o == 0)
+    {
+        free(oc);
     }
 
     if (e == 1)
@@ -518,120 +618,6 @@ int parseArgument(int argc, char **argv, struct Arguments *args)
         args->decrypt = true;
     }
     return 1;
-
-    // if (e == 1 && m == 1 && o == 1)
-    // {
-    //     fc = NULL;
-    //     return 1;
-    // }
-    // else if (e == 1 && m == 1 && o == 0)
-    // {
-    //     fc = NULL;
-    //     oc = NULL;
-    //     return 1;
-    // }
-    // else if (e == 1 && f == 1 && o == 1)
-    // {
-    //     mc = NULL;
-    //     return 1;
-    // }
-    // else if (e == 1 && f == 1 && o == 0)
-    // {
-    //     mc = NULL;
-    //     oc = NULL;
-    //     return 2;
-    // }
-    // else if (d == 1 && m == 1 && o == 1)
-    // {
-    //     fc = NULL;
-    //     return 2;
-    // }
-    // else if (d == 1 && m == 1 && o == 0)
-    // {
-    //     fc = NULL;
-    //     oc = NULL;
-    //     return 2;
-    // }
-    // else if (d == 1 && f == 1 && o == 1)
-    // {
-    //     mc = NULL;
-    //     return 2;
-    // }
-    // else if (d == 1 && f == 1 && o == 0)
-    // {
-    //     mc = NULL;
-    //     oc = NULL;
-    //     return 2;
-    // }
-
-    // if (e == 1 && m == 1 && o == 1)
-    // {
-    //     char **fa = malloc(4 * sizeof(char *));
-    //     fa[0] = "1";
-    //     fa[1] = mc;
-    //     fa[2] = oc;
-    //     fa[3] = kc;
-    //     return fa;
-    // }
-    // else if (e == 1 && m == 1 && o == 0)
-    // {
-    //     char **fa = malloc(3 * sizeof(char *));
-    //     fa[0] = "2";
-    //     fa[1] = mc;
-    //     fa[2] = kc;
-    //     return fa;
-    // }
-    // else if (e == 1 && f == 1 && o == 1)
-    // {
-    //     char **fa = malloc(4 * sizeof(char *));
-    //     fa[0] = "3";
-    //     fa[1] = fc;
-    //     fa[2] = oc;
-    //     fa[3] = kc;
-    //     return fa;
-    // }
-    // else if (e == 1 && f == 1 && o == 0)
-    // {
-    //     char **fa = malloc(3 * sizeof(char *));
-    //     fa[0] = "4";
-    //     fa[1] = fc;
-    //     fa[2] = kc;
-    //     return fa;
-    // }
-    // else if (d == 1 && m == 1 && o == 1)
-    // {
-    //     char **fa = malloc(4 * sizeof(char *));
-    //     fa[0] = "5";
-    //     fa[1] = mc;
-    //     fa[2] = oc;
-    //     fa[3] = kc;
-    //     return fa;
-    // }
-    // else if (d == 1 && m == 1 && o == 0)
-    // {
-    //     char **fa = malloc(3 * sizeof(char *));
-    //     fa[0] = "6";
-    //     fa[1] = mc;
-    //     fa[2] = kc;
-    //     return fa;
-    // }
-    // else if (d == 1 && f == 1 && o == 1)
-    // {
-    //     char **fa = malloc(4 * sizeof(char *));
-    //     fa[0] = "7";
-    //     fa[1] = fc;
-    //     fa[2] = oc;
-    //     fa[3] = kc;
-    //     return fa;
-    // }
-    // else if (d == 1 && f == 1 && o == 0)
-    // {
-    //     char **fa = malloc(3 * sizeof(char *));
-    //     fa[0] = "8";
-    //     fa[1] = fc;
-    //     fa[2] = kc;
-    //     return fa;
-    // }
 }
 
 int writeFile(struct Arguments *args)
@@ -674,6 +660,7 @@ int readFile(struct Arguments *args)
             {
                 free(m);
                 printf("Dynamic memory allocation failed. Please run program again.\n");
+                fclose(fp);
                 return 0;
             }
 
@@ -686,6 +673,15 @@ int readFile(struct Arguments *args)
     return 1;
 }
 
+/*
+ * Applies the forward or reverse substitution key to every alphabetic
+ * character in args->inputMessage, preserving case and passing through
+ * all non-alphabetic bytes unchanged.
+ *
+ * As in keyValidate(), every ctype.h call is given an `unsigned char`
+ * to avoid undefined behavior on high-bit-set bytes when `char` is
+ * signed.
+ */
 char *transformText(struct Arguments *args)
 {
     size_t n = strlen(args->inputMessage);
@@ -694,13 +690,14 @@ char *transformText(struct Arguments *args)
     {
         for (size_t i = 0; i < n; i++)
         {
-            if (isalpha((args->inputMessage)[i]))
+            unsigned char ch = (unsigned char)(args->inputMessage)[i];
+            if (isalpha(ch))
             {
-                int pos = tolower((args->inputMessage)[i]) - 97;
+                int pos = tolower(ch) - 'a';
                 fm[i] = (args->forwardkey)[pos];
-                if (isupper((args->inputMessage)[i]))
+                if (isupper(ch))
                 {
-                    fm[i] = (char)toupper(fm[i]);
+                    fm[i] = (char)toupper((unsigned char)fm[i]);
                 }
             }
             else
@@ -713,26 +710,14 @@ char *transformText(struct Arguments *args)
     {
         for (size_t i = 0; i < n; i++)
         {
-            // if (isalpha((args->inputMessage)[i]))
-            // {
-            //     char *p = strchr(args->forwardkey, tolower((args->inputMessage)[i]));
-            //     if (p != NULL)
-            //     {
-            //         int pos = p - args->forwardkey;
-            //         fm[i] = (char)('a' + pos);
-            //         if (isupper((args->inputMessage)[i]))
-            //         {
-            //             fm[i] = toupper(fm[i]);
-            //         }
-            //     }
-            // }
-            if (isalpha((args->inputMessage)[i]))
+            unsigned char ch = (unsigned char)(args->inputMessage)[i];
+            if (isalpha(ch))
             {
-                int pos = tolower((args->inputMessage)[i]) - 97;
+                int pos = tolower(ch) - 'a';
                 fm[i] = (args->reverseKey)[pos];
-                if (isupper((args->inputMessage)[i]))
+                if (isupper(ch))
                 {
-                    fm[i] = (char)toupper(fm[i]);
+                    fm[i] = (char)toupper((unsigned char)fm[i]);
                 }
             }
             else
@@ -746,15 +731,33 @@ char *transformText(struct Arguments *args)
     return fm;
 }
 
+/*
+ * Frees every heap buffer that may be hanging off `args` by the time
+ * parseArgument() has returned successfully. Safe to call at any point
+ * afterwards, and safe to call more than once: any field that was never
+ * populated is NULL, and free(NULL) is a well-defined no-op.
+ */
+static void freeArgs(struct Arguments *args)
+{
+    free(args->inputMessage);
+    free(args->outputMessage);
+    free(args->inputFile);
+    free(args->outputFile);
+    args->inputMessage = NULL;
+    args->outputMessage = NULL;
+    args->inputFile = NULL;
+    args->outputFile = NULL;
+}
+
 int main(int argc, char **argv)
 {
     printf("CipherCLI: ");
     args args = {0};
-    // char **fa = parseArgument(argc, argv);
     int fa = parseArgument(argc, argv, &args);
 
     if (fa == 0)
     {
+        /* parseArgument() already released everything it allocated. */
         return 0;
     }
     if (args.inputFromFile)
@@ -762,104 +765,26 @@ int main(int argc, char **argv)
         if (readFile(&args) == 0)
         {
             printError(14);
+            freeArgs(&args);
             return 0;
         }
     }
     transformText(&args);
-    // if (args.encrypt)
-    // {
-    //     transformText("1", m, kc);
-    //     free(mc);
-    //     free(kc);
-    // }
-    // else if (fa == 2)
-    // {
-    //     transformText("2", m, kc);
-    //     free(mc);
-    //     free(kc);
-    // }
     if (args.outputToFile)
     {
         if (writeFile(&args) == 0)
         {
             printError(13);
+            freeArgs(&args);
             return 0;
         }
         printf("Message has been written to the specified output file.");
     }
-    else if (args.outputToFile == false)
+    else
     {
         printf("Encrypted Text: %s", args.outputMessage);
     }
 
-    // else if (strncmp(fa[0], "1", 1) == 0)
-    // {
-    //     char *fm = transformText('1', fa[1], fa[3]);
-    //     fileHandler(fa[2], "w", fm);
-    //     printf("Message has been written to the specified output file.");
-    // }
-    // else if (strncmp(fa[0], "2", 1) == 0)
-    // {
-    //     char *fm = transformText('1', fa[1], fa[2]);
-    //     printf("Encrypted Text: %s", fm);
-    // }
-    // else if (strncmp(fa[0], "3", 1) == 0)
-    // {
-    //     char *m = fileHandler(fa[1], "r", NULL);
-    //     if (m == NULL)
-    //     {
-    //         printError(14);
-    //         return 0;
-    //     }
-    //     char *fm = transformText('1', m, fa[3]);
-    //     fileHandler(fa[2], "w", fm);
-    //     printf("Message has been written to the specified output file.");
-    // }
-    // else if (strncmp(fa[0], "4", 1) == 0)
-    // {
-    //     char *m = fileHandler(fa[1], "w", NULL);
-    //     if (m == NULL)
-    //     {
-    //         printError(14);
-    //         return 0;
-    //     }
-    //     char *fm = transformText('1', m, fa[2]);
-    //     printf("Encrypted Text: %s", fm);
-    // }
-    // else if (strncmp(fa[0], "5", 1) == 0)
-    // {
-    //     char *fm = transformText('2', fa[1], fa[3]);
-    //     fileHandler(fa[2], "w", fm);
-    //     printf("Message has been written to the specified output file.");
-    // }
-    // else if (strncmp(fa[0], "6", 1) == 0)
-    // {
-    //     char *fm = transformText('2', fa[1], fa[2]);
-    //     printf("Encrypted Text: %s", fm);
-    // }
-    // else if (strncmp(fa[0], "7", 1) == 0)
-    // {
-    //     char *m = fileHandler(fa[1], "r", NULL);
-    //     if (m == NULL)
-    //     {
-    //         printError(14);
-    //         return 0;
-    //     }
-    //     char *fm = transformText('2', m, fa[3]);
-    //     fileHandler(fa[2], "w", fm);
-    //     printf("Message has been written to the specified output file.");
-    // }
-    // else if (strncmp(fa[0], "8", 1) == 0)
-    // {
-    //     char *m = fileHandler(fa[1], "r", NULL);
-    //     if (m == NULL)
-    //     {
-    //         printError(14);
-    //         return 0;
-    //     }
-    //     char *fm = transformText('2', m, fa[2]);
-    //     printf("Encrypted Text: %s", fm);
-    // }
-
+    freeArgs(&args);
     return 0;
 }

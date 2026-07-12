@@ -209,7 +209,6 @@ AAAAAAAAAAAAAAAAAAAAAAAAAA
 
 Some planned enhancements include:
 
-- Random substitution key generation
 - Support for custom alphabets
 - Frequency analysis utilities
 - Batch processing of multiple files

@@ -189,7 +189,7 @@ char *keyGenerate(struct Arguments *args)
  * and recording the argv index of its most recent occurrence. Duplicate
  * detection relies on the counts (e, d, m, f, o, k), not the positions.
  */
-void tagType(int argc, char **argv, int *e, int *d, int *m, int *f, int *o, int *k, int *h, int *narg, int *ep, int *dp, int *mp, int *fp, int *op, int *kp)
+void tagType(int argc, char **argv, int *e, int *d, int *m, int *f, int *o, int *k, int *g, int *h, int *narg, char ***ep, char ***dp, char ***mp, char ***fp, char ***op, char ***kp, char ***gp)
 {
     for (int i = 1; i < argc; i++)
     {
@@ -197,37 +197,37 @@ void tagType(int argc, char **argv, int *e, int *d, int *m, int *f, int *o, int 
         {
             if ((strncmp("-e", argv[i], 2)) == 0 || (strncmp("-E", argv[i], 2)) == 0)
             {
-                *ep = i;
+                *ep = (argv + i);
                 *e = *e + 1;
                 *narg = *narg + 1;
             }
             else if ((strncmp("-d", argv[i], 2)) == 0 || (strncmp("-D", argv[i], 2)) == 0)
             {
-                *dp = i;
+                *dp = (argv + i);
                 *d = *d + 1;
                 *narg = *narg + 1;
             }
             else if ((strncmp("-m", argv[i], 2)) == 0 || (strncmp("-M", argv[i], 2)) == 0)
             {
-                *mp = i;
+                *mp = (argv + i);
                 *m = *m + 1;
                 *narg = *narg + 2;
             }
             else if ((strncmp("-f", argv[i], 2)) == 0 || (strncmp("-F", argv[i], 2)) == 0)
             {
-                *fp = i;
+                *fp = (argv + i);
                 *f = *f + 1;
                 *narg = *narg + 2;
             }
             else if ((strncmp("-o", argv[i], 2)) == 0 || (strncmp("-O", argv[i], 2)) == 0)
             {
-                *op = i;
+                *op = (argv + i);
                 *o = *o + 1;
                 *narg = *narg + 2;
             }
             else if ((strncmp("-k", argv[i], 2)) == 0 || (strncmp("-K", argv[i], 2)) == 0)
             {
-                *kp = i;
+                *kp = (argv + i);
                 *k = *k + 1;
                 *narg = *narg + 2;
             }
@@ -397,7 +397,7 @@ int keyValidate(char *kc, struct Arguments *args)
  * clean up, so there is exactly one place in the whole program that
  * ever frees these buffers.
  */
-int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, int h, int narg, int ep, int dp, int mp, int fp, int op, int kp, char **mc, char **fc, char **oc, char **kc, struct Arguments *args)
+int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, int g, int h, int narg, char **ep, char **dp, char **mp, char **fp, char **op, char **kp, char **gp, char **mc, char **fc, char **oc, char **kc, struct Arguments *args)
 {
 
     if (argc == 1)
@@ -453,14 +453,14 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
 
     if (argc < narg)
     {
-        int ps[] = {ep, dp, mp, fp, op, kp};
-        for (int i = 0; i < 6; i++)
+        char **ps[] = {ep, dp, mp, fp, op, kp, gp};
+        for (int i = 0; i < 7; i++)
         {
-            for (int j = 0; j < 6 - i - 1; j++)
+            for (int j = 0; j < 7 - i - 1; j++)
             {
                 if (ps[j] > ps[j + 1])
                 {
-                    int temp = ps[j];
+                    char **temp = ps[j];
                     ps[j] = ps[j + 1];
                     ps[j + 1] = temp;
                 }
@@ -470,15 +470,15 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
                 }
             }
         }
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 6; i++)
         {
-            if (ps[i] == 0 || ps[i] == ep || ps[i] == dp)
+            if (ps[i] == 0 || ps[i] == ep || ps[i] == dp || ps[i] == gp)
             {
                 continue;
             }
-            else if (ps[i] - ps[i + 1] > -2)
+            else if (ps[i] - ps[i + 1] > -4)
             {
-                printError(tagTypeSingle(argv[ps[i]]));
+                printError(tagTypeSingle(*(ps[i])));
                 return 0;
             }
         }
@@ -489,25 +489,26 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
         return 0;
     }
 
-    for (int j = 1; j < argc; j++)
+    for (char **j = argv + 1; j < argv + argc; j++)
     {
-        size_t s = strlen(argv[j]);
-        if (j == ep || j == dp)
+        size_t s = strlen(*j);
+        if (j == ep || j == dp || j == gp)
         {
             continue;
         }
         else if (j == mp || j == fp || j == op || j == kp)
         {
-            if (j == argc - 1)
+            if (j == argv + (argc - 1))
             {
-                printError(tagTypeSingle(argv[j]));
+                printError(tagTypeSingle(*j));
                 return 0;
             }
         }
 
         else if (j == mp + 1)
         {
-            if ((tagTypeSingle(argv[mp + 1]) != 0) || (mp + 1 == argc))
+
+            if ((tagTypeSingle(*(mp + 1)) != 0) || (mp == argv + (argc - 1)))
             {
                 printError(9);
                 return 0;
@@ -522,13 +523,13 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
                 }
 
                 *mc = temp;
-                strcpy(*mc, argv[j]);
+                strcpy(*mc, *j);
                 args->inputMessage = *mc;
             }
         }
         else if (j == fp + 1)
         {
-            if (!hasValidTxtExtension(argv[fp + 1]))
+            if (!hasValidTxtExtension(*(fp + 1)))
             {
                 printError(15);
                 return 0;
@@ -543,14 +544,14 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
                 }
 
                 *fc = temp;
-                strcpy(*fc, argv[j]);
+                strcpy(*fc, *j);
                 args->inputFromFile = true;
                 args->inputFile = *fc;
             }
         }
         else if (j == op + 1)
         {
-            if (!hasValidTxtExtension(argv[op + 1]))
+            if (!hasValidTxtExtension(*(op + 1)))
             {
                 printError(16);
                 return 0;
@@ -565,7 +566,7 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
                 }
 
                 *oc = temp;
-                strcpy(*oc, argv[j]);
+                strcpy(*oc, *j);
                 args->outputToFile = true;
                 args->outputFile = *oc;
             }
@@ -580,7 +581,7 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
             }
 
             *kc = temp;
-            strcpy(*kc, argv[j]);
+            strcpy(*kc, *j);
             if (keyValidate(*kc, args) == 0)
             {
                 return 0;
@@ -593,17 +594,17 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
         }
     }
 
-    if (m == 1 && ((tagTypeSingle(argv[mp + 1]) != 0) || (mp + 1 == argc)))
+    if (m == 1 && ((tagTypeSingle(*(mp + 1)) != 0) || (mp == argv + (argc - 1))))
     {
         printError(9);
         return 0;
     }
-    if (f == 1 && ((tagTypeSingle(argv[fp + 1]) != 0) || (fp + 1 == argc) || !hasValidTxtExtension(argv[fp + 1])))
+    if (f == 1 && ((tagTypeSingle(*(fp + 1)) != 0) || (fp == argv + (argc - 1)) || !hasValidTxtExtension(*(fp + 1))))
     {
         printError(10);
         return 0;
     }
-    if (o == 1 && ((tagTypeSingle(argv[op + 1]) != 0) || (op + 1 == argc) || !hasValidTxtExtension(argv[op + 1])))
+    if (o == 1 && ((tagTypeSingle(*(op + 1)) != 0) || (op == argv + (argc - 1)) || !hasValidTxtExtension(*(op + 1))))
     {
         printError(11);
         return 0;
@@ -634,10 +635,11 @@ int parseArgument(int argc, char **argv, struct Arguments *args)
     char *oc = calloc(100, sizeof(char));
     char *fc = calloc(100, sizeof(char));
 
-    int e = 0, d = 0, m = 0, f = 0, o = 0, k = 0, h = 0, narg = 1, ep = 0, dp = 0, mp = 0, fp = 0, op = 0, kp = 0;
+    int e = 0, d = 0, m = 0, f = 0, o = 0, k = 0, g = 0, h = 0, narg = 1;
+    char **ep = NULL, **dp = NULL, **mp = NULL, **fp = NULL, **op = NULL, **kp = NULL, **gp = NULL;
 
-    tagType(argc, argv, &e, &d, &m, &f, &o, &k, &h, &narg, &ep, &dp, &mp, &fp, &op, &kp);
-    if (errorType(argc, argv, e, d, m, f, o, k, h, narg, ep, dp, mp, fp, op, kp, &mc, &fc, &oc, &kc, args) == 0)
+    tagType(argc, argv, &e, &d, &m, &f, &o, &k, &g, &h, &narg, &ep, &dp, &mp, &fp, &op, &kp, &gp);
+    if (errorType(argc, argv, e, d, m, f, o, k, g, h, narg, ep, dp, mp, fp, op, kp, gp, &mc, &fc, &oc, &kc, args) == 0)
     {
         free(mc);
         free(kc);

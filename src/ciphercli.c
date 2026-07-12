@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdbool.h>
+#include <time.h>
 
 typedef struct Arguments
 {
@@ -26,6 +27,7 @@ typedef struct Arguments
     bool decrypt;
     bool inputFromFile;
     bool outputToFile;
+    bool keyIsGenerated;
     char *inputMessage;  /* heap-owned; freed by freeArgs() */
     char *outputMessage; /* heap-owned; freed by freeArgs() */
     char *inputFile;     /* heap-owned; freed by freeArgs() */
@@ -55,7 +57,7 @@ void printError(int e)
         break;
 
     case 5:
-        printf("Error: No substitution key specified. Use '-k <key>'.");
+        printf("Error: No substitution key specified. Use '-k <key>' or '-g' to generate one.");
         break;
 
     case 6:
@@ -118,6 +120,10 @@ void printError(int e)
         printf("Error: The substitution key may contain alphabetic characters only.");
         break;
 
+    case 21:
+        printf("Error: Either specify a key (-k) or generate one (-g), not both.");
+        break;
+
     default:
         break;
     }
@@ -137,10 +143,45 @@ void printHelp()
     printf("  %-6s Encrypt input\n", "-e");
     printf("  %-6s Decrypt input\n", "-d");
     printf("  %-6s Specify substitution key\n", "-k");
+    printf("  %-6s Generate substitution key\n", "-g");
     printf("  %-6s Read input from command line\n", "-m");
     printf("  %-6s Read input from a file\n", "-f");
     printf("  %-6s Write output to a file\n", "-o");
     printf("  %-6s Display this help message\n", "-h");
+}
+
+char *keyGenerate(struct Arguments *args)
+{
+    int *lowerAscii = calloc(26, sizeof(int));
+    char *key = calloc(26, sizeof(char));
+    for (int i = 0; i < 26; i++)
+    {
+        lowerAscii[i] = 97 + i;
+    }
+    for (int j = 0; j < 26; j++)
+    {
+        srand(time(NULL));
+        int r = rand() % (26 - j);
+        key[j] = (char)lowerAscii[r];
+        lowerAscii[r] = lowerAscii[25 - j];
+        if (25 - j == 0)
+        {
+            free(lowerAscii);
+        }
+        else
+        {
+            lowerAscii = realloc(lowerAscii, ((25 - j) * sizeof(int)));
+        }
+    }
+    key[26] = '\0';
+    strcpy(args->forwardkey, key);
+    for (int i = 0; i < 26; i++)
+    {
+        int pos = key[i] - 'a';
+        (args->reverseKey)[pos] = (char)(i + 'a');
+    }
+    (args->reverseKey)[26] = '\0';
+    free(key);
 }
 
 /*
@@ -190,6 +231,12 @@ void tagType(int argc, char **argv, int *e, int *d, int *m, int *f, int *o, int 
                 *k = *k + 1;
                 *narg = *narg + 2;
             }
+            else if ((strncmp("-g", argv[i], 2)) == 0 || (strncmp("-G", argv[i], 2)) == 0)
+            {
+                *gp = (argv + i);
+                *g = *g + 1;
+                *narg = *narg + 1;
+            }
             else if ((strncmp("-h", argv[i], 2)) == 0 || (strncmp("-H", argv[i], 2)) == 0 || (strncmp("-?", argv[i], 2)) == 0)
             {
                 *h = *h + 1;
@@ -231,6 +278,10 @@ int tagTypeSingle(char *argv)
         else if ((strncmp("-k", argv, 2)) == 0 || (strncmp("-K", argv, 2)) == 0)
         {
             return 5;
+        }
+        else if ((strncmp("-g", argv, 2)) == 0 || (strncmp("-G", argv, 2)) == 0)
+        {
+            return 3;
         }
         else if ((strncmp("-h", argv, 2)) == 0 || (strncmp("-H", argv, 2)) == 0 || (strncmp("-?", argv, 2)) == 0)
         {
@@ -369,17 +420,22 @@ int errorType(int argc, char **argv, int e, int d, int m, int f, int o, int k, i
         printError(4);
         return 0;
     }
+    if (k > 0 && g > 0)
+    {
+        printError(21);
+        return 0;
+    }
     if (e == 0 && d == 0)
     {
         printError(6);
         return 0;
     }
-    if ((m == 0 && f == 0))
+    if (m == 0 && f == 0)
     {
         printError(7);
         return 0;
     }
-    if (k == 0)
+    if (k == 0 && g == 0)
     {
         printError(5);
         return 0;
@@ -617,6 +673,12 @@ int parseArgument(int argc, char **argv, struct Arguments *args)
     {
         args->decrypt = true;
     }
+    if (g == 1)
+    {
+        keyGenerate(args);
+        args->keyIsGenerated = true;
+    }
+
     return 1;
 }
 
@@ -751,7 +813,7 @@ static void freeArgs(struct Arguments *args)
 
 int main(int argc, char **argv)
 {
-    printf("CipherCLI: ");
+    printf("CipherCLI: \n");
     args args = {0};
     int fa = parseArgument(argc, argv, &args);
 
@@ -769,6 +831,11 @@ int main(int argc, char **argv)
             return 0;
         }
     }
+    if (args.keyIsGenerated)
+    {
+        printf("Generated Key: %s\n", args.forwardkey);
+    }
+
     transformText(&args);
     if (args.outputToFile)
     {
@@ -778,11 +845,11 @@ int main(int argc, char **argv)
             freeArgs(&args);
             return 0;
         }
-        printf("Message has been written to the specified output file.");
+        printf("Message has been written to the specified output file.\n");
     }
     else
     {
-        printf("Encrypted Text: %s", args.outputMessage);
+        printf("Encrypted Text: %s\n", args.outputMessage);
     }
 
     freeArgs(&args);
